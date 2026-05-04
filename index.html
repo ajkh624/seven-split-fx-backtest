@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>세븐스플릿 USD/KRW 백테스트</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", sans-serif; }
+  .num { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+<div class="max-w-6xl mx-auto p-4 sm:p-6">
+  <header class="mb-6">
+    <h1 class="text-2xl sm:text-3xl font-bold text-slate-900">세븐스플릿 USD/KRW 백테스트</h1>
+    <p class="text-sm text-slate-500 mt-1">자금을 N개 트랜치로 분할, 하락 단계마다 매수 → 트랜치별 익절 매도. 거래수수료 0 가정.</p>
+  </header>
+
+  <!-- 파라미터 -->
+  <section class="bg-white rounded-lg shadow-sm p-4 sm:p-5 mb-5">
+    <h2 class="font-semibold mb-3 text-slate-900">파라미터</h2>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+      <label class="flex flex-col">초기자본(원)
+        <input id="capital" type="number" value="10000000" step="1000000" class="mt-1 border rounded px-2 py-1.5 num">
+      </label>
+      <label class="flex flex-col">트랜치 수
+        <input id="splits" type="number" value="7" min="1" max="20" class="mt-1 border rounded px-2 py-1.5 num">
+      </label>
+      <label class="flex flex-col">매수 간격(%)
+        <input id="buyStep" type="number" value="1" step="0.1" class="mt-1 border rounded px-2 py-1.5 num">
+        <span class="text-xs text-slate-400 mt-0.5">N단계는 -N×간격%</span>
+      </label>
+      <label class="flex flex-col">익절(%)
+        <input id="takeProfit" type="number" value="1" step="0.1" class="mt-1 border rounded px-2 py-1.5 num">
+      </label>
+      <label class="flex flex-col">시작일
+        <input id="startDate" type="date" value="2020-01-01" class="mt-1 border rounded px-2 py-1.5">
+      </label>
+      <label class="flex flex-col">종료일
+        <input id="endDate" type="date" class="mt-1 border rounded px-2 py-1.5">
+      </label>
+      <label class="flex flex-col">기준가 모드
+        <select id="anchorMode" class="mt-1 border rounded px-2 py-1.5">
+          <option value="rolling" selected>최근 청산가 기준 (롤링)</option>
+          <option value="fixed">시작가 고정</option>
+        </select>
+      </label>
+      <label class="flex flex-col">데이터 소스
+        <select id="dataSource" class="mt-1 border rounded px-2 py-1.5">
+          <option value="builtin" selected>내장 CSV (usdkrw.csv)</option>
+          <option value="upload">파일 업로드</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="uploadBox" class="hidden mt-3">
+      <input id="fileInput" type="file" accept=".csv" class="text-sm">
+      <p class="text-xs text-slate-500 mt-1">CSV 형식: date,open,high,low,close (헤더 포함)</p>
+    </div>
+
+    <div class="mt-4 flex gap-2">
+      <button id="runBtn" class="bg-slate-900 text-white px-4 py-2 rounded font-medium hover:bg-slate-800">백테스트 실행</button>
+      <button id="downloadBtn" class="border px-4 py-2 rounded font-medium hover:bg-slate-100" disabled>거래내역 CSV</button>
+    </div>
+    <p id="status" class="text-xs text-slate-500 mt-2"></p>
+  </section>
+
+  <!-- 결과 지표 -->
+  <section id="resultSection" class="hidden grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs text-slate-500">총 수익률</div>
+      <div id="m_totalReturn" class="text-xl font-bold num mt-1">-</div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs text-slate-500">CAGR</div>
+      <div id="m_cagr" class="text-xl font-bold num mt-1">-</div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs text-slate-500">최대낙폭(MDD)</div>
+      <div id="m_mdd" class="text-xl font-bold num mt-1 text-rose-600">-</div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs text-slate-500">거래 횟수 (매수/매도)</div>
+      <div id="m_trades" class="text-xl font-bold num mt-1">-</div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs text-slate-500">실현손익(원)</div>
+      <div id="m_realized" class="text-xl font-bold num mt-1">-</div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs text-slate-500">평가손익(원)</div>
+      <div id="m_unrealized" class="text-xl font-bold num mt-1">-</div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs text-slate-500">최종 자산(원)</div>
+      <div id="m_finalEquity" class="text-xl font-bold num mt-1">-</div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs text-slate-500">USD 보유</div>
+      <div id="m_usdHold" class="text-xl font-bold num mt-1">-</div>
+    </div>
+  </section>
+
+  <!-- 차트 -->
+  <section id="chartSection" class="hidden bg-white rounded-lg shadow-sm p-4 sm:p-5 mb-5">
+    <h2 class="font-semibold mb-3">USD/KRW 가격 & 거래 시점</h2>
+    <div class="h-72 sm:h-96"><canvas id="priceChart"></canvas></div>
+    <h2 class="font-semibold mt-6 mb-3">자산 곡선</h2>
+    <div class="h-72 sm:h-96"><canvas id="equityChart"></canvas></div>
+  </section>
+
+  <!-- 거래내역 -->
+  <section id="tradesSection" class="hidden bg-white rounded-lg shadow-sm p-4 sm:p-5 mb-10">
+    <h2 class="font-semibold mb-3">거래 내역 (최근 50건)</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs num">
+        <thead class="text-left text-slate-500 border-b">
+          <tr><th class="py-1.5 pr-2">일자</th><th>구분</th><th>트랜치</th><th>가격</th><th>USD</th><th>KRW</th><th>손익</th></tr>
+        </thead>
+        <tbody id="tradesBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="text-xs text-slate-400 pb-8 text-center">
+    데이터: Yahoo Finance KRW=X · 본 결과는 과거 데이터 기반 시뮬레이션이며 미래 수익을 보장하지 않습니다.
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// 데이터 소스 토글
+$('dataSource').addEventListener('change', (e) => {
+  $('uploadBox').classList.toggle('hidden', e.target.value !== 'upload');
+});
+
+let priceChart, equityChart, lastTrades = [];
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const out = [];
+  for (let i = 1; i < lines.length; i++) {
+    const p = lines[i].split(',');
+    if (p.length < 5) continue;
+    const close = parseFloat(p[4]);
+    if (!isFinite(close)) continue;
+    out.push({
+      date: p[0],
+      open: parseFloat(p[1]) || close,
+      high: parseFloat(p[2]) || close,
+      low: parseFloat(p[3]) || close,
+      close: close,
+    });
+  }
+  return out;
+}
+
+async function loadData() {
+  const src = $('dataSource').value;
+  if (src === 'upload') {
+    const file = $('fileInput').files[0];
+    if (!file) throw new Error('CSV 파일을 선택하세요.');
+    return parseCSV(await file.text());
+  }
+  const r = await fetch('usdkrw.csv');
+  if (!r.ok) throw new Error('내장 CSV 로드 실패: ' + r.status);
+  return parseCSV(await r.text());
+}
+
+function backtest(data, params) {
+  const { capital, splits, buyStep, takeProfit, anchorMode } = params;
+  // 트랜치 자금 균등 분할
+  const tranches = [];
+  const perTranche = capital / splits;
+  for (let i = 0; i < splits; i++) {
+    tranches.push({ idx: i + 1, krw: perTranche, usd: 0, buyPrice: null, level: i + 1 });
+  }
+
+  let anchor = data[0].close; // 기준가
+  const trades = [];
+  const equityCurve = [];
+  let realized = 0;
+
+  for (let d = 0; d < data.length; d++) {
+    const bar = data[d];
+
+    // 매수: 미보유 트랜치 중, 기준가 대비 -level×buyStep% 이하면 종가에 매수
+    for (const t of tranches) {
+      if (t.usd > 0) continue;
+      const targetPrice = anchor * (1 - (t.level * buyStep) / 100);
+      if (bar.low <= targetPrice) {
+        // 당일 저가까지 도달한 경우 targetPrice에 매수 가정
+        const fillPrice = Math.min(targetPrice, bar.open);
+        const usd = t.krw / fillPrice;
+        t.usd = usd;
+        t.buyPrice = fillPrice;
+        t.krw = 0;
+        trades.push({ date: bar.date, type: 'BUY', tranche: t.idx, price: fillPrice, usd, krw: usd * fillPrice, pnl: 0 });
+      }
+    }
+
+    // 매도: 보유 트랜치 중, 매수가 대비 +takeProfit% 이상이면 익절
+    let lastSellPrice = null;
+    for (const t of tranches) {
+      if (t.usd === 0) continue;
+      const targetPrice = t.buyPrice * (1 + takeProfit / 100);
+      if (bar.high >= targetPrice) {
+        const fillPrice = Math.max(targetPrice, bar.open);
+        const krw = t.usd * fillPrice;
+        const pnl = krw - t.usd * t.buyPrice;
+        realized += pnl;
+        trades.push({ date: bar.date, type: 'SELL', tranche: t.idx, price: fillPrice, usd: t.usd, krw, pnl });
+        t.krw = krw; // 원금 회수 (재투자 위해 시드 유지) — 실현 손익은 별도 누적
+        // 단순화: 트랜치 시드를 perTranche로 리셋해서 복리/원금 분리. 실현손익은 외부 계좌로.
+        t.krw = perTranche;
+        t.usd = 0;
+        t.buyPrice = null;
+        lastSellPrice = fillPrice;
+      }
+    }
+
+    // 기준가 갱신 (rolling 모드)
+    if (anchorMode === 'rolling' && lastSellPrice !== null) {
+      anchor = lastSellPrice;
+    }
+
+    // 자산평가 (당일 종가 기준)
+    let usdHold = 0;
+    for (const t of tranches) usdHold += t.usd;
+    const positionValue = usdHold * bar.close;
+    const cashIdle = tranches.reduce((s, t) => s + (t.usd === 0 ? t.krw : 0), 0);
+    const equity = cashIdle + positionValue + realized;
+    equityCurve.push({ date: bar.date, equity, price: bar.close });
+  }
+
+  // 미실현 손익
+  const finalBar = data[data.length - 1];
+  let unrealized = 0;
+  let usdFinal = 0;
+  for (const t of tranches) {
+    if (t.usd > 0) {
+      unrealized += t.usd * (finalBar.close - t.buyPrice);
+      usdFinal += t.usd;
+    }
+  }
+
+  return { trades, equityCurve, realized, unrealized, usdFinal, tranches, anchor };
+}
+
+function fmt(n, digits = 0) {
+  if (!isFinite(n)) return '-';
+  return n.toLocaleString('ko-KR', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+function fmtPct(n) { return (n * 100).toFixed(2) + '%'; }
+
+function calcMetrics(equityCurve, capital) {
+  let peak = -Infinity, mdd = 0;
+  for (const p of equityCurve) {
+    if (p.equity > peak) peak = p.equity;
+    const dd = (p.equity - peak) / peak;
+    if (dd < mdd) mdd = dd;
+  }
+  const final = equityCurve[equityCurve.length - 1].equity;
+  const totalReturn = (final - capital) / capital;
+  const days = (new Date(equityCurve[equityCurve.length - 1].date) - new Date(equityCurve[0].date)) / 86400000;
+  const years = days / 365.25;
+  const cagr = years > 0 ? Math.pow(final / capital, 1 / years) - 1 : 0;
+  return { totalReturn, cagr, mdd, finalEquity: final };
+}
+
+async function run() {
+  const status = $('status');
+  status.textContent = '실행 중...';
+  try {
+    const data = await loadData();
+    const sd = $('startDate').value, ed = $('endDate').value;
+    const filtered = data.filter(b => (!sd || b.date >= sd) && (!ed || b.date <= ed));
+    if (filtered.length < 30) throw new Error('데이터가 30일 이상 필요합니다. 기간을 확인하세요.');
+
+    const params = {
+      capital: parseFloat($('capital').value),
+      splits: parseInt($('splits').value),
+      buyStep: parseFloat($('buyStep').value),
+      takeProfit: parseFloat($('takeProfit').value),
+      anchorMode: $('anchorMode').value,
+    };
+
+    const r = backtest(filtered, params);
+    const m = calcMetrics(r.equityCurve, params.capital);
+
+    $('m_totalReturn').textContent = fmtPct(m.totalReturn);
+    $('m_totalReturn').className = 'text-xl font-bold num mt-1 ' + (m.totalReturn >= 0 ? 'text-emerald-600' : 'text-rose-600');
+    $('m_cagr').textContent = fmtPct(m.cagr);
+    $('m_mdd').textContent = fmtPct(m.mdd);
+    const buys = r.trades.filter(t => t.type === 'BUY').length;
+    const sells = r.trades.filter(t => t.type === 'SELL').length;
+    $('m_trades').textContent = `${buys} / ${sells}`;
+    $('m_realized').textContent = fmt(r.realized);
+    $('m_unrealized').textContent = fmt(r.unrealized);
+    $('m_finalEquity').textContent = fmt(m.finalEquity);
+    $('m_usdHold').textContent = fmt(r.usdFinal, 2) + ' USD';
+
+    drawCharts(r, filtered);
+    drawTrades(r.trades);
+    lastTrades = r.trades;
+
+    $('resultSection').classList.remove('hidden');
+    $('chartSection').classList.remove('hidden');
+    $('tradesSection').classList.remove('hidden');
+    $('downloadBtn').disabled = false;
+    status.textContent = `완료 (${filtered.length}일, ${filtered[0].date} ~ ${filtered[filtered.length-1].date})`;
+  } catch (e) {
+    status.textContent = '에러: ' + e.message;
+    console.error(e);
+  }
+}
+
+function drawCharts(r, data) {
+  const labels = data.map(d => d.date);
+  const prices = data.map(d => d.close);
+  const buys = r.trades.filter(t => t.type === 'BUY').map(t => ({ x: t.date, y: t.price }));
+  const sells = r.trades.filter(t => t.type === 'SELL').map(t => ({ x: t.date, y: t.price }));
+
+  if (priceChart) priceChart.destroy();
+  priceChart = new Chart($('priceChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'USD/KRW', data: prices, borderColor: '#0f172a', borderWidth: 1.2, pointRadius: 0, tension: 0 },
+        { label: '매수', data: buys, type: 'scatter', backgroundColor: '#10b981', pointRadius: 3 },
+        { label: '매도', data: sells, type: 'scatter', backgroundColor: '#ef4444', pointRadius: 3 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { x: { type: 'time', time: { unit: 'year' } }, y: { beginAtZero: false } },
+      plugins: { legend: { position: 'bottom' } },
+    },
+  });
+
+  if (equityChart) equityChart.destroy();
+  equityChart = new Chart($('equityChart'), {
+    type: 'line',
+    data: {
+      labels: r.equityCurve.map(p => p.date),
+      datasets: [{ label: '자산(원)', data: r.equityCurve.map(p => p.equity), borderColor: '#2563eb', borderWidth: 1.5, pointRadius: 0, fill: true, backgroundColor: 'rgba(37,99,235,0.08)' }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { x: { type: 'time', time: { unit: 'year' } } },
+      plugins: { legend: { position: 'bottom' } },
+    },
+  });
+}
+
+function drawTrades(trades) {
+  const tbody = $('tradesBody');
+  tbody.innerHTML = '';
+  const recent = trades.slice(-50).reverse();
+  for (const t of recent) {
+    const tr = document.createElement('tr');
+    tr.className = 'border-b last:border-0';
+    const pnlClass = t.pnl > 0 ? 'text-emerald-600' : t.pnl < 0 ? 'text-rose-600' : '';
+    tr.innerHTML = `
+      <td class="py-1 pr-2">${t.date}</td>
+      <td class="${t.type==='BUY'?'text-emerald-700':'text-rose-700'}">${t.type}</td>
+      <td>#${t.tranche}</td>
+      <td>${t.price.toFixed(2)}</td>
+      <td>${t.usd.toFixed(2)}</td>
+      <td>${fmt(t.krw)}</td>
+      <td class="${pnlClass}">${t.pnl ? fmt(t.pnl) : '-'}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function downloadCSV() {
+  const head = 'date,type,tranche,price,usd,krw,pnl\n';
+  const rows = lastTrades.map(t => [t.date, t.type, t.tranche, t.price.toFixed(4), t.usd.toFixed(4), t.krw.toFixed(2), t.pnl.toFixed(2)].join(',')).join('\n');
+  const blob = new Blob([head + rows], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'seven-split-trades.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+$('runBtn').addEventListener('click', run);
+$('downloadBtn').addEventListener('click', downloadCSV);
+
+// 종료일 기본값 = 오늘
+$('endDate').value = new Date().toISOString().slice(0, 10);
+</script>
+</body>
+</html>
