@@ -448,26 +448,65 @@ async function run() {
 }
 
 function drawCharts(r, data) {
-  const labels = data.map(d => d.date);
-  const prices = data.map(d => d.close);
-  const buys = r.trades.filter(t => t.type === 'BUY').map(t => ({ x: t.date, y: t.price }));
-  const sells = r.trades.filter(t => t.type === 'SELL').map(t => ({ x: t.date, y: t.price }));
+  const ts = (s) => new Date(s).getTime();
+  const prices = data.map(d => ({ x: ts(d.date), y: d.close }));
+
+  // 같은 (x,y) 좌표 중복 거래 → 카운트해서 점 크기 키우기
+  const aggregate = (trades) => {
+    const map = new Map();
+    for (const t of trades) {
+      const x = ts(t.date);
+      const key = `${x}|${t.price.toFixed(2)}`;
+      if (map.has(key)) map.get(key).count++;
+      else map.set(key, { x, y: t.price, count: 1, tranche: t.tranche });
+    }
+    return [...map.values()];
+  };
+  const buys = aggregate(r.trades.filter(t => t.type === 'BUY'));
+  const sells = aggregate(r.trades.filter(t => t.type === 'SELL'));
+  const equity = r.equityCurve.map(p => ({ x: ts(p.date), y: p.equity }));
+
+  // 기간 길이에 따라 x축 단위 자동 결정
+  const days = data.length;
+  const unit = days <= 14 ? 'day' : days <= 90 ? 'week' : days <= 730 ? 'month' : 'year';
 
   if (priceChart) priceChart.destroy();
   priceChart = new Chart($('priceChart'), {
     type: 'line',
     data: {
-      labels,
       datasets: [
-        { label: 'USD/KRW', data: prices, borderColor: '#0f172a', borderWidth: 1.2, pointRadius: 0, tension: 0 },
-        { label: '매수', data: buys, type: 'scatter', backgroundColor: '#10b981', pointRadius: 3 },
-        { label: '매도', data: sells, type: 'scatter', backgroundColor: '#ef4444', pointRadius: 3 },
+        { label: 'USD/KRW', data: prices, borderColor: '#0f172a', borderWidth: 1.2, pointRadius: 0, tension: 0, parsing: false },
+        {
+          label: '매수', data: buys, type: 'scatter',
+          backgroundColor: 'rgba(16,185,129,0.65)', borderColor: '#059669', borderWidth: 1.5,
+          pointRadius: (ctx) => 4 + (ctx.raw?.count || 1) * 1.5,
+          parsing: false,
+        },
+        {
+          label: '매도', data: sells, type: 'scatter',
+          backgroundColor: 'rgba(239,68,68,0.65)', borderColor: '#dc2626', borderWidth: 1.5,
+          pointRadius: (ctx) => 4 + (ctx.raw?.count || 1) * 1.5,
+          parsing: false,
+        },
       ],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      scales: { x: { type: 'time', time: { unit: 'year' } }, y: { beginAtZero: false } },
-      plugins: { legend: { position: 'bottom' } },
+      scales: { x: { type: 'time', time: { unit, tooltipFormat: 'yyyy-MM-dd' } }, y: { beginAtZero: false } },
+      plugins: {
+        legend: { position: 'bottom' },
+        tooltip: {
+          mode: 'nearest', intersect: false,
+          callbacks: {
+            label: (ctx) => {
+              const r = ctx.raw;
+              if (r && r.count > 1) return `${ctx.dataset.label} ×${r.count}건 @ ${r.y.toFixed(2)}`;
+              if (r && r.count === 1) return `${ctx.dataset.label} #${r.tranche} @ ${r.y.toFixed(2)}`;
+              return `${ctx.dataset.label}: ${(r?.y ?? ctx.parsed.y).toFixed(2)}`;
+            }
+          }
+        }
+      },
     },
   });
 
@@ -475,12 +514,11 @@ function drawCharts(r, data) {
   equityChart = new Chart($('equityChart'), {
     type: 'line',
     data: {
-      labels: r.equityCurve.map(p => p.date),
-      datasets: [{ label: '자산(원)', data: r.equityCurve.map(p => p.equity), borderColor: '#2563eb', borderWidth: 1.5, pointRadius: 0, fill: true, backgroundColor: 'rgba(37,99,235,0.08)' }],
+      datasets: [{ label: '자산(원)', data: equity, borderColor: '#2563eb', borderWidth: 1.5, pointRadius: 0, fill: true, backgroundColor: 'rgba(37,99,235,0.08)', parsing: false }],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      scales: { x: { type: 'time', time: { unit: 'year' } } },
+      scales: { x: { type: 'time', time: { unit, tooltipFormat: 'yyyy-MM-dd' } } },
       plugins: { legend: { position: 'bottom' } },
     },
   });
