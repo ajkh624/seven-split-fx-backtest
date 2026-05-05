@@ -42,6 +42,12 @@
       <label class="flex flex-col">종료일
         <input id="endDate" type="date" class="mt-1 border rounded px-2 py-1.5">
       </label>
+      <label class="flex flex-col">시작 월
+        <input id="startMonth" type="month" class="mt-1 border rounded px-2 py-1.5">
+      </label>
+      <label class="flex flex-col">종료 월
+        <input id="endMonth" type="month" class="mt-1 border rounded px-2 py-1.5">
+      </label>
       <label class="flex flex-col">기준가 모드
         <select id="anchorMode" class="mt-1 border rounded px-2 py-1.5">
           <option value="recent_high" selected>N일 이동 고가</option>
@@ -69,6 +75,17 @@
     <div id="uploadBox" class="hidden mt-3">
       <input id="fileInput" type="file" accept=".csv" class="text-sm">
       <p class="text-xs text-slate-500 mt-1">CSV 형식: date,open,high,low,close (헤더 포함)</p>
+    </div>
+
+    <div class="mt-4 flex flex-wrap gap-2">
+      <span class="text-xs text-slate-500 self-center mr-1">빠른 기간:</span>
+      <button class="preset border px-2.5 py-1 rounded text-xs hover:bg-slate-100" data-range="1m">1개월</button>
+      <button class="preset border px-2.5 py-1 rounded text-xs hover:bg-slate-100" data-range="2m">2개월</button>
+      <button class="preset border px-2.5 py-1 rounded text-xs hover:bg-slate-100" data-range="3m">3개월</button>
+      <button class="preset border px-2.5 py-1 rounded text-xs hover:bg-slate-100" data-range="6m">6개월</button>
+      <button class="preset border px-2.5 py-1 rounded text-xs hover:bg-slate-100" data-range="1y">1년</button>
+      <button class="preset border px-2.5 py-1 rounded text-xs hover:bg-slate-100" data-range="ytd">YTD</button>
+      <button class="preset border px-2.5 py-1 rounded text-xs hover:bg-slate-100" data-range="all">전체</button>
     </div>
 
     <div class="mt-4 flex gap-2">
@@ -301,7 +318,7 @@ async function run() {
     const data = await loadData();
     const sd = $('startDate').value, ed = $('endDate').value;
     const filtered = data.filter(b => (!sd || b.date >= sd) && (!ed || b.date <= ed));
-    if (filtered.length < 30) throw new Error('데이터가 30일 이상 필요합니다. 기간을 확인하세요.');
+    if (filtered.length < 5) throw new Error('데이터가 5일 이상 필요합니다. 기간을 확인하세요.');
 
     const params = {
       capital: parseFloat($('capital').value),
@@ -417,6 +434,48 @@ $('downloadBtn').addEventListener('click', downloadCSV);
 
 // 종료일 기본값 = 오늘
 $('endDate').value = new Date().toISOString().slice(0, 10);
+
+// 시작/종료 월 ↔ 시작/종료일 양방향 동기화
+function lastDayOfMonth(yyyymm) {
+  const [y, m] = yyyymm.split('-').map(Number);
+  return new Date(y, m, 0).toISOString().slice(0, 10); // 다음달 0일 = 이번달 말일
+}
+$('startMonth').addEventListener('change', (e) => {
+  if (e.target.value) $('startDate').value = e.target.value + '-01';
+});
+$('endMonth').addEventListener('change', (e) => {
+  if (e.target.value) $('endDate').value = lastDayOfMonth(e.target.value);
+});
+$('startDate').addEventListener('change', (e) => {
+  if (e.target.value) $('startMonth').value = e.target.value.slice(0, 7);
+});
+$('endDate').addEventListener('change', (e) => {
+  if (e.target.value) $('endMonth').value = e.target.value.slice(0, 7);
+});
+
+// 빠른 기간 프리셋
+function applyPreset(range) {
+  const today = new Date();
+  const end = today.toISOString().slice(0, 10);
+  let start;
+  if (range === 'all') {
+    start = '2015-01-01';
+  } else if (range === 'ytd') {
+    start = today.getFullYear() + '-01-01';
+  } else {
+    const m = { '1m': 1, '2m': 2, '3m': 3, '6m': 6, '1y': 12 }[range];
+    const d = new Date(today);
+    d.setMonth(d.getMonth() - m);
+    start = d.toISOString().slice(0, 10);
+  }
+  $('startDate').value = start;
+  $('endDate').value = end;
+  $('startMonth').value = start.slice(0, 7);
+  $('endMonth').value = end.slice(0, 7);
+}
+document.querySelectorAll('.preset').forEach(btn => {
+  btn.addEventListener('click', () => applyPreset(btn.dataset.range));
+});
 </script>
 </body>
 </html>
