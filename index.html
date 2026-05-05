@@ -91,6 +91,16 @@
       <button class="preset border px-2.5 py-1 rounded text-xs hover:bg-slate-100" data-range="all">전체</button>
     </div>
 
+    <div class="mt-2 flex flex-wrap gap-2">
+      <span class="text-xs text-slate-500 self-center mr-1">시장 국면:</span>
+      <button class="regime border border-emerald-300 bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded text-xs hover:bg-emerald-100" data-start="2020-04-01" data-end="2022-09-30" title="코로나 저점→피크 (1235→1430, +15.8%)">📈 상승장 (20-22 코로나)</button>
+      <button class="regime border border-emerald-300 bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded text-xs hover:bg-emerald-100" data-start="2024-09-01" data-end="2024-12-15" title="24년 가을 급등 (1337→1428, +6.8%)">📈 상승장 (24년 가을)</button>
+      <button class="regime border border-rose-300 bg-rose-50 text-rose-700 px-2.5 py-1 rounded text-xs hover:bg-rose-100" data-start="2022-10-15" data-end="2023-02-01" title="22말 피크아웃 (1441→1232, -14.5%)">📉 하락장 (22-23 급락)</button>
+      <button class="regime border border-rose-300 bg-rose-50 text-rose-700 px-2.5 py-1 rounded text-xs hover:bg-rose-100" data-start="2025-01-15" data-end="2025-07-31" title="25년 상반기 하락 (1460→1392, -4.7%)">📉 하락장 (25 상반기)</button>
+      <button class="regime border border-amber-300 bg-amber-50 text-amber-700 px-2.5 py-1 rounded text-xs hover:bg-amber-100" data-start="2023-05-01" data-end="2023-10-31" title="23년 여름 박스권 (1343↔1348, ±7%)">↔️ 횡보장 (23 여름)</button>
+      <button class="regime border border-amber-300 bg-amber-50 text-amber-700 px-2.5 py-1 rounded text-xs hover:bg-amber-100" data-start="2024-04-01" data-end="2024-08-31" title="24년 봄여름 박스권 (1356↔1333, ±5%)">↔️ 횡보장 (24 봄여름)</button>
+    </div>
+
     <div class="mt-4 flex gap-2">
       <button id="runBtn" class="bg-slate-900 text-white px-4 py-2 rounded font-medium hover:bg-slate-800">백테스트 실행</button>
       <button id="downloadBtn" class="border px-4 py-2 rounded font-medium hover:bg-slate-100" disabled>거래내역 CSV</button>
@@ -520,6 +530,18 @@ function applyPreset(range) {
 }
 document.querySelectorAll('.preset').forEach(btn => {
   btn.addEventListener('click', () => applyPreset(btn.dataset.range));
+});
+
+// 시장 국면 프리셋
+document.querySelectorAll('.regime').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const s = btn.dataset.start, e = btn.dataset.end;
+    $('startDate').value = s;
+    $('endDate').value = e;
+    $('startMonth').value = s.slice(0, 7);
+    $('endMonth').value = e.slice(0, 7);
+    run();
+  });
 });
 </script>
 </body>
