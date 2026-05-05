@@ -101,12 +101,24 @@
   <!-- 결과 지표 -->
   <section id="resultSection" class="hidden grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
     <div class="bg-white rounded-lg shadow-sm p-4">
-      <div class="text-xs text-slate-500">총 수익률</div>
+      <div class="text-xs text-slate-500">총 수익률 <span class="text-[10px] text-slate-400">(전략)</span></div>
       <div id="m_totalReturn" class="text-xl font-bold num mt-1">-</div>
     </div>
     <div class="bg-white rounded-lg shadow-sm p-4">
-      <div class="text-xs text-slate-500">CAGR</div>
+      <div class="text-xs text-slate-500">CAGR <span class="text-[10px] text-slate-400">(전략)</span></div>
       <div id="m_cagr" class="text-xl font-bold num mt-1">-</div>
+    </div>
+    <div class="bg-amber-50 rounded-lg shadow-sm p-4 border border-amber-200">
+      <div class="text-xs text-amber-700">원환율 수익률 <span class="text-[10px] text-amber-500">(B&amp;H)</span></div>
+      <div id="m_bhReturn" class="text-xl font-bold num mt-1">-</div>
+    </div>
+    <div class="bg-amber-50 rounded-lg shadow-sm p-4 border border-amber-200">
+      <div class="text-xs text-amber-700">원환율 CAGR <span class="text-[10px] text-amber-500">(B&amp;H)</span></div>
+      <div id="m_bhCagr" class="text-xl font-bold num mt-1">-</div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs text-slate-500">초과수익 (전략 − B&amp;H)</div>
+      <div id="m_alpha" class="text-xl font-bold num mt-1">-</div>
     </div>
     <div class="bg-white rounded-lg shadow-sm p-4">
       <div class="text-xs text-slate-500">최대낙폭(MDD)</div>
@@ -336,9 +348,25 @@ async function run() {
     const r = backtest(filtered, params);
     const m = calcMetrics(r.equityCurve, params.capital);
 
-    $('m_totalReturn').textContent = fmtPct(m.totalReturn);
-    $('m_totalReturn').className = 'text-xl font-bold num mt-1 ' + (m.totalReturn >= 0 ? 'text-emerald-600' : 'text-rose-600');
+    // 원환율 단순보유(B&H) 비교: 시작일 종가 → 종료일 종가
+    const startPx = filtered[0].close;
+    const endPx = filtered[filtered.length - 1].close;
+    const bhReturn = (endPx - startPx) / startPx;
+    const days = (new Date(filtered[filtered.length - 1].date) - new Date(filtered[0].date)) / 86400000;
+    const years = days / 365.25;
+    const bhCagr = years > 0 ? Math.pow(endPx / startPx, 1 / years) - 1 : 0;
+    const alpha = m.totalReturn - bhReturn;
+
+    const setSign = (id, v) => {
+      const el = $(id);
+      el.textContent = fmtPct(v);
+      el.className = 'text-xl font-bold num mt-1 ' + (v >= 0 ? 'text-emerald-600' : 'text-rose-600');
+    };
+    setSign('m_totalReturn', m.totalReturn);
     $('m_cagr').textContent = fmtPct(m.cagr);
+    setSign('m_bhReturn', bhReturn);
+    $('m_bhCagr').textContent = fmtPct(bhCagr);
+    setSign('m_alpha', alpha);
     $('m_mdd').textContent = fmtPct(m.mdd);
     const buys = r.trades.filter(t => t.type === 'BUY').length;
     const sells = r.trades.filter(t => t.type === 'SELL').length;
