@@ -466,6 +466,19 @@ $('downloadBtn').addEventListener('click', downloadCSV);
 // 종료일 기본값 = 오늘
 $('endDate').value = new Date().toISOString().slice(0, 10);
 
+// 자동 재실행 (입력 변경 시 디바운스)
+let _runTimer = null;
+function scheduleRun() {
+  clearTimeout(_runTimer);
+  _runTimer = setTimeout(() => { if ($('resultSection').classList.contains('hidden') === false) run(); }, 250);
+}
+const autoIds = ['capital','splits','buyStep','takeProfit','startDate','endDate','startMonth','endMonth','anchorMode','anchorWindow','sameBarExit'];
+autoIds.forEach(id => {
+  const el = $(id);
+  el.addEventListener('change', scheduleRun);
+  if (el.tagName === 'INPUT') el.addEventListener('input', scheduleRun);
+});
+
 // 시작/종료 월 ↔ 시작/종료일 양방향 동기화
 function lastDayOfMonth(yyyymm) {
   const [y, m] = yyyymm.split('-').map(Number);
@@ -503,6 +516,7 @@ function applyPreset(range) {
   $('endDate').value = end;
   $('startMonth').value = start.slice(0, 7);
   $('endMonth').value = end.slice(0, 7);
+  run(); // 프리셋 클릭 시 즉시 실행
 }
 document.querySelectorAll('.preset').forEach(btn => {
   btn.addEventListener('click', () => applyPreset(btn.dataset.range));
