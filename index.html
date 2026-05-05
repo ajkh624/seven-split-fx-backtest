@@ -32,12 +32,16 @@
       <label class="flex flex-col">트랜치 수
         <input id="splits" type="number" value="7" min="1" max="20" class="mt-1 border rounded px-2 py-1.5 num">
       </label>
-      <label class="flex flex-col">매수 간격(%)
+      <label class="flex flex-col">2~7번 매수 간격(%)
         <input id="buyStep" type="number" value="1" step="0.1" class="mt-1 border rounded px-2 py-1.5 num">
-        <span class="text-xs text-slate-400 mt-0.5">N단계는 -N×간격%</span>
+        <span class="text-xs text-slate-400 mt-0.5">1번 매수가 기준 -N×간격%</span>
       </label>
-      <label class="flex flex-col">익절(%)
+      <label class="flex flex-col">2~7번 익절(%)
         <input id="takeProfit" type="number" value="1" step="0.1" class="mt-1 border rounded px-2 py-1.5 num">
+      </label>
+      <label class="flex flex-col">1번 계좌 익절(%)
+        <input id="longTakeProfit" type="number" value="20" step="1" class="mt-1 border rounded px-2 py-1.5 num">
+        <span class="text-xs text-slate-400 mt-0.5">큰 수익 도달 시만</span>
       </label>
       <label class="flex flex-col">시작일
         <input id="startDate" type="date" value="2020-01-01" class="mt-1 border rounded px-2 py-1.5">
@@ -50,16 +54,6 @@
       </label>
       <label class="flex flex-col">종료 월
         <input id="endMonth" type="month" class="mt-1 border rounded px-2 py-1.5">
-      </label>
-      <label class="flex flex-col">기준가 모드
-        <select id="anchorMode" class="mt-1 border rounded px-2 py-1.5">
-          <option value="recent_high" selected>N일 이동 고가</option>
-          <option value="rolling">최근 청산가 (롤링)</option>
-          <option value="fixed">시작가 고정</option>
-        </select>
-      </label>
-      <label class="flex flex-col">이동 고가 창(N일)
-        <input id="anchorWindow" type="number" value="20" min="2" max="250" class="mt-1 border rounded px-2 py-1.5 num">
       </label>
       <label class="flex flex-col items-start">같은봉 매수→매도
         <select id="sameBarExit" class="mt-1 border rounded px-2 py-1.5 w-full">
@@ -227,75 +221,84 @@ async function loadData() {
 }
 
 function backtest(data, params) {
-  const { capital, splits, buyStep, takeProfit, anchorMode, anchorWindow, sameBarExit } = params;
+  const { capital, splits, buyStep, takeProfit, longTakeProfit, sameBarExit } = params;
   // 트랜치 자금 균등 분할
   const tranches = [];
   const perTranche = capital / splits;
+  // idx=1은 장기 계좌, idx>=2는 단기 트레이딩 계좌
   for (let i = 0; i < splits; i++) {
-    tranches.push({ idx: i + 1, krw: perTranche, usd: 0, buyPrice: null, level: i + 1, boughtBar: -1 });
+    tranches.push({
+      idx: i + 1,
+      isLong: (i === 0),
+      krw: perTranche,
+      usd: 0,
+      buyPrice: null,
+      level: i + 1, // 단기 계좌의 매수 트리거 깊이 (2번=-1×간격, 3번=-2×간격 ...)
+      boughtBar: -1,
+    });
   }
 
-  let anchor = data[0].close; // 기준가 (rolling/fixed 초기값)
   const trades = [];
   const equityCurve = [];
   let realized = 0;
+  let anchor = null; // 1번 계좌 매수가 = 2~N번 매수 트리거 기준
 
   for (let d = 0; d < data.length; d++) {
     const bar = data[d];
 
-    // 기준가 갱신: recent_high 모드는 직전 N일(현재봉 제외) 고가 사용
-    if (anchorMode === 'recent_high') {
-      const start = Math.max(0, d - anchorWindow);
-      let h = -Infinity;
-      for (let k = start; k < d; k++) if (data[k].high > h) h = data[k].high;
-      if (d === 0) h = bar.open;
-      anchor = h;
+    // ── 0. 1번 장기 계좌: 첫 봉 시가에 즉시 매수 (한 번만)
+    const longT = tranches[0];
+    if (longT && longT.usd === 0 && longT.buyPrice === null && d === 0) {
+      const fillPrice = bar.open;
+      longT.usd = longT.krw / fillPrice;
+      longT.buyPrice = fillPrice;
+      longT.krw = 0;
+      longT.boughtBar = d;
+      anchor = fillPrice; // 2~N번 매수 기준가
+      trades.push({ date: bar.date, type: 'BUY', tranche: longT.idx, price: fillPrice, usd: longT.usd, krw: longT.usd * fillPrice, pnl: 0, note: '장기' });
     }
 
-    // 매수: 미보유 트랜치 중, 기준가 대비 -level×buyStep% 이하면 매수
-    for (const t of tranches) {
-      if (t.usd > 0) continue;
-      const targetPrice = anchor * (1 - (t.level * buyStep) / 100);
+    // ── 1. 2~N번 단기 계좌 매수: anchor 대비 -(level-1)×buyStep% 도달 시
+    for (let i = 1; i < tranches.length; i++) {
+      const t = tranches[i];
+      if (t.usd > 0 || anchor === null) continue;
+      const targetPrice = anchor * (1 - ((t.level - 1) * buyStep) / 100);
       if (bar.low <= targetPrice) {
-        // 갭하락 시 시가, 일중 도달 시 목표가에서 체결 가정
         const fillPrice = bar.open <= targetPrice ? bar.open : targetPrice;
-        const usd = t.krw / fillPrice;
-        t.usd = usd;
+        t.usd = t.krw / fillPrice;
         t.buyPrice = fillPrice;
         t.krw = 0;
         t.boughtBar = d;
-        trades.push({ date: bar.date, type: 'BUY', tranche: t.idx, price: fillPrice, usd, krw: usd * fillPrice, pnl: 0 });
+        trades.push({ date: bar.date, type: 'BUY', tranche: t.idx, price: fillPrice, usd: t.usd, krw: t.usd * fillPrice, pnl: 0, note: '단기' });
       }
     }
 
-    // 매도: 보유 트랜치 중, 매수가 대비 +takeProfit% 이상이면 익절
-    let lastSellPrice = null;
+    // ── 2. 매도
     for (const t of tranches) {
       if (t.usd === 0) continue;
-      // 같은봉 매수→매도 차단 옵션
       if (sameBarExit === 'block' && t.boughtBar === d) continue;
-      const targetPrice = t.buyPrice * (1 + takeProfit / 100);
+      const tp = t.isLong ? longTakeProfit : takeProfit;
+      const targetPrice = t.buyPrice * (1 + tp / 100);
       if (bar.high >= targetPrice) {
         const fillPrice = bar.open >= targetPrice ? bar.open : targetPrice;
         const krw = t.usd * fillPrice;
         const pnl = krw - t.usd * t.buyPrice;
         realized += pnl;
-        trades.push({ date: bar.date, type: 'SELL', tranche: t.idx, price: fillPrice, usd: t.usd, krw, pnl });
-        // 트랜치 시드 리셋, 실현손익은 별도 누적
-        t.krw = perTranche;
+        trades.push({ date: bar.date, type: 'SELL', tranche: t.idx, price: fillPrice, usd: t.usd, krw, pnl, note: t.isLong ? '장기' : '단기' });
+        // 매도 대금 = krw 그대로 회수 (현 자본 기준 회전, 복리 자연 반영)
+        t.krw = krw;
         t.usd = 0;
         t.buyPrice = null;
         t.boughtBar = -1;
-        lastSellPrice = fillPrice;
+        if (t.isLong) {
+          // 장기 계좌가 익절되면 anchor 무효화 → 시뮬레이션상 단기 계좌도 더이상 신규 진입 안 함
+          // (현실에서는 다시 진입하지만, 백테스트 단순화)
+          anchor = null;
+        }
       }
     }
 
-    // 기준가 갱신 (rolling 모드)
-    if (anchorMode === 'rolling' && lastSellPrice !== null) {
-      anchor = lastSellPrice;
-    }
-
-    // 자산평가 (당일 종가 기준)
+    // ── 3. 자산평가
     let usdHold = 0;
     for (const t of tranches) usdHold += t.usd;
     const positionValue = usdHold * bar.close;
@@ -353,18 +356,11 @@ async function run() {
       splits: parseInt($('splits').value),
       buyStep: parseFloat($('buyStep').value),
       takeProfit: parseFloat($('takeProfit').value),
-      anchorMode: $('anchorMode').value,
-      anchorWindow: parseInt($('anchorWindow').value) || 20,
+      longTakeProfit: parseFloat($('longTakeProfit').value),
       sameBarExit: $('sameBarExit').value,
     };
 
-    // M2: 짧은 기간 + recent_high 모드일 때 anchorWindow 자동 축소 + 사용자에게 안내
     let anchorNote = '';
-    if (params.anchorMode === 'recent_high' && filtered.length < params.anchorWindow * 1.5) {
-      const adjusted = Math.max(2, Math.floor(filtered.length / 3));
-      anchorNote = ` (이동 고가 창 ${params.anchorWindow}→${adjusted}일 자동 축소)`;
-      params.anchorWindow = adjusted;
-    }
 
     const r = backtest(filtered, params);
     const m = calcMetrics(r.equityCurve, params.capital);
@@ -459,10 +455,13 @@ function drawTrades(trades) {
     const tr = document.createElement('tr');
     tr.className = 'border-b last:border-0';
     const pnlClass = t.pnl > 0 ? 'text-emerald-600' : t.pnl < 0 ? 'text-rose-600' : '';
+    const noteBadge = t.note === '장기'
+      ? '<span class="text-[10px] px-1 py-0.5 rounded bg-indigo-100 text-indigo-700">장기</span>'
+      : '<span class="text-[10px] px-1 py-0.5 rounded bg-slate-100 text-slate-600">단기</span>';
     tr.innerHTML = `
       <td class="py-1 pr-2">${t.date}</td>
       <td class="${t.type==='BUY'?'text-emerald-700':'text-rose-700'}">${t.type}</td>
-      <td>#${t.tranche}</td>
+      <td>#${t.tranche} ${noteBadge}</td>
       <td>${t.price.toFixed(2)}</td>
       <td>${t.usd.toFixed(2)}</td>
       <td>${fmt(t.krw)}</td>
@@ -493,7 +492,7 @@ function scheduleRun() {
   clearTimeout(_runTimer);
   _runTimer = setTimeout(() => { if ($('resultSection').classList.contains('hidden') === false) run(); }, 250);
 }
-const autoIds = ['capital','splits','buyStep','takeProfit','startDate','endDate','startMonth','endMonth','anchorMode','anchorWindow','sameBarExit'];
+const autoIds = ['capital','splits','buyStep','takeProfit','longTakeProfit','startDate','endDate','startMonth','endMonth','sameBarExit'];
 autoIds.forEach(id => {
   const el = $(id);
   el.addEventListener('change', scheduleRun);
