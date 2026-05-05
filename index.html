@@ -34,7 +34,19 @@
       </label>
       <label class="flex flex-col">2~7번 매수 간격(%)
         <input id="buyStep" type="number" value="1" step="0.1" class="mt-1 border rounded px-2 py-1.5 num">
-        <span class="text-xs text-slate-400 mt-0.5">1번 매수가 기준 -N×간격%</span>
+        <span class="text-xs text-slate-400 mt-0.5">고정 모드 시 사용</span>
+      </label>
+      <label class="flex flex-col">매수 간격 모드
+        <select id="stepMode" class="mt-1 border rounded px-2 py-1.5">
+          <option value="fixed" selected>고정</option>
+          <option value="atr0.5">ATR × 0.5 (잦은 거래)</option>
+          <option value="atr1.0">ATR × 1.0 (균형)</option>
+          <option value="atr1.5">ATR × 1.5 (보수적)</option>
+        </select>
+        <span class="text-xs text-slate-400 mt-0.5">변동성 적응형</span>
+      </label>
+      <label class="flex flex-col">ATR 윈도우(일)
+        <input id="atrWindow" type="number" value="14" min="2" max="60" class="mt-1 border rounded px-2 py-1.5 num">
       </label>
       <label class="flex flex-col">2~7번 익절(%)
         <input id="takeProfit" type="number" value="1" step="0.1" class="mt-1 border rounded px-2 py-1.5 num">
@@ -221,7 +233,25 @@ async function loadData() {
 }
 
 function backtest(data, params) {
-  const { capital, splits, buyStep, takeProfit, longTakeProfit, sameBarExit } = params;
+  const { capital, splits, buyStep, takeProfit, longTakeProfit, sameBarExit, stepMode, atrWindow } = params;
+
+  // ATR_pct 사전 계산: 직전 N일 (high-low)/close × 100 평균
+  const atrMult = stepMode === 'atr0.5' ? 0.5 : stepMode === 'atr1.0' ? 1.0 : stepMode === 'atr1.5' ? 1.5 : 0;
+  const atrPct = new Array(data.length).fill(buyStep);
+  if (atrMult > 0) {
+    for (let d = 0; d < data.length; d++) {
+      const start = Math.max(0, d - atrWindow);
+      let sum = 0, cnt = 0;
+      for (let k = start; k < d; k++) {
+        if (data[k].close > 0) {
+          sum += (data[k].high - data[k].low) / data[k].close * 100;
+          cnt++;
+        }
+      }
+      atrPct[d] = cnt > 0 ? Math.max(0.1, sum / cnt * atrMult) : buyStep;
+    }
+  }
+
   // 트랜치 자금 균등 분할
   const tranches = [];
   const perTranche = capital / splits;
@@ -259,14 +289,16 @@ function backtest(data, params) {
     }
 
     // ── 1. 2~N번 단기 계좌 매수
-    //    첫 진입: anchor(1번 매수가) 대비 -(level-1)×buyStep% 도달 시
-    //    재진입: 자기 직전 매도가 대비 -buyStep% 도달 시 (독립 운영)
+    //    첫 진입: anchor(1번 매수가) 대비 -(level-1)×step% 도달 시
+    //    재진입: 자기 직전 매도가 대비 -step% 도달 시 (독립 운영)
+    //    step = ATR 모드면 동적, 아니면 buyStep 고정
+    const step = atrPct[d];
     for (let i = 1; i < tranches.length; i++) {
       const t = tranches[i];
       if (t.usd > 0 || anchor === null) continue;
       const targetPrice = (t.lastSellPrice !== undefined && t.lastSellPrice !== null)
-        ? t.lastSellPrice * (1 - buyStep / 100)
-        : anchor * (1 - ((t.level - 1) * buyStep) / 100);
+        ? t.lastSellPrice * (1 - step / 100)
+        : anchor * (1 - ((t.level - 1) * step) / 100);
       if (bar.low <= targetPrice) {
         const fillPrice = bar.open <= targetPrice ? bar.open : targetPrice;
         t.usd = t.krw / fillPrice;
@@ -363,6 +395,8 @@ async function run() {
       takeProfit: parseFloat($('takeProfit').value),
       longTakeProfit: parseFloat($('longTakeProfit').value),
       sameBarExit: $('sameBarExit').value,
+      stepMode: $('stepMode').value,
+      atrWindow: parseInt($('atrWindow').value) || 14,
     };
 
     let anchorNote = '';
@@ -497,7 +531,7 @@ function scheduleRun() {
   clearTimeout(_runTimer);
   _runTimer = setTimeout(() => { if ($('resultSection').classList.contains('hidden') === false) run(); }, 250);
 }
-const autoIds = ['capital','splits','buyStep','takeProfit','longTakeProfit','startDate','endDate','startMonth','endMonth','sameBarExit'];
+const autoIds = ['capital','splits','buyStep','takeProfit','longTakeProfit','startDate','endDate','startMonth','endMonth','sameBarExit','stepMode','atrWindow'];
 autoIds.forEach(id => {
   const el = $(id);
   el.addEventListener('change', scheduleRun);
