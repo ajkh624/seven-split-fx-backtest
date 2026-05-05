@@ -258,11 +258,15 @@ function backtest(data, params) {
       trades.push({ date: bar.date, type: 'BUY', tranche: longT.idx, price: fillPrice, usd: longT.usd, krw: longT.usd * fillPrice, pnl: 0, note: '장기' });
     }
 
-    // ── 1. 2~N번 단기 계좌 매수: anchor 대비 -(level-1)×buyStep% 도달 시
+    // ── 1. 2~N번 단기 계좌 매수
+    //    첫 진입: anchor(1번 매수가) 대비 -(level-1)×buyStep% 도달 시
+    //    재진입: 자기 직전 매도가 대비 -buyStep% 도달 시 (독립 운영)
     for (let i = 1; i < tranches.length; i++) {
       const t = tranches[i];
       if (t.usd > 0 || anchor === null) continue;
-      const targetPrice = anchor * (1 - ((t.level - 1) * buyStep) / 100);
+      const targetPrice = (t.lastSellPrice !== undefined && t.lastSellPrice !== null)
+        ? t.lastSellPrice * (1 - buyStep / 100)
+        : anchor * (1 - ((t.level - 1) * buyStep) / 100);
       if (bar.low <= targetPrice) {
         const fillPrice = bar.open <= targetPrice ? bar.open : targetPrice;
         t.usd = t.krw / fillPrice;
@@ -290,6 +294,7 @@ function backtest(data, params) {
         t.usd = 0;
         t.buyPrice = null;
         t.boughtBar = -1;
+        if (!t.isLong) t.lastSellPrice = fillPrice; // 단기 계좌: 다음 재진입 기준
         if (t.isLong) {
           // 장기 계좌가 익절되면 anchor 무효화 → 시뮬레이션상 단기 계좌도 더이상 신규 진입 안 함
           // (현실에서는 다시 진입하지만, 백테스트 단순화)
